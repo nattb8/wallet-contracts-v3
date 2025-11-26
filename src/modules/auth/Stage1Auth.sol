@@ -41,9 +41,11 @@ contract Stage1Auth is BaseAuth, Implementation {
   /// @notice Emitted when the image hash is updated
   event ImageHashUpdated(bytes32 newImageHash);
 
-  constructor(address _factory, address _stage2, address _immutableSignerContract) {
-    // Build init code hash of the deployed wallets using that module
-    bytes32 initCodeHash = keccak256(abi.encodePacked(Wallet.creationCode, uint256(uint160(address(this)))));
+  constructor(address _factory, address _stage2, address _immutableSignerContract, address _startupWalletImpl) {
+    // Build init code hash of the deployed wallets using the startup wallet impl
+    // Note: Using V1 Wallet bytecode (not V3) to ensure correct CFA calculation
+    bytes memory walletCreationCode = hex"6054600f3d396034805130553df3fe63906111273d3560e01c14602b57363d3d373d3d3d3d369030545af43d82803e156027573d90f35b3d90fd5b30543d5260203df3";
+    bytes32 initCodeHash = keccak256(abi.encodePacked(walletCreationCode, uint256(uint160(_startupWalletImpl))));
 
     INIT_CODE_HASH = initCodeHash;
     FACTORY = _factory;
@@ -65,25 +67,32 @@ contract Stage1Auth is BaseAuth, Implementation {
     _updateImplementation(STAGE_2_IMPLEMENTATION);
   }
 
-  /// @notice Calculate imageHash for Immutable-only signer (V1 format)
-  /// @dev Uses V1 imageHash format: keccak256(abi.encode(threshold, signers[]))
-  ///      This matches the signature encoding used by walletMultiSign helper
+  /// @notice Calculate imageHash for Immutable-only signer (v3 format)
+  /// @dev In v3, imageHash = keccak256(keccak256(keccak256(merkleRoot, threshold), checkpoint), checkpointer)
+  ///      For a single signer with threshold=1, checkpoint=0, no checkpointer:
+  ///      - merkleRoot = keccak256("Sequence signer:\n", address, weight)
+  ///      - imageHash = keccak256(keccak256(keccak256(merkleRoot, 1), 0), 0)
   function imageHashOfImmutableSigner() internal view returns (bytes32 primary, bytes32 rollover) {
     // Get primary signer
     address primarySignerEOA = IImmutableSigner(IMMUTABLE_SIGNER_CONTRACT).primarySigner();
     
-    // V1 format: keccak256(abi.encode(threshold, [signers]))
-    address[] memory primarySigners = new address[](1);
-    primarySigners[0] = primarySignerEOA;
-    primary = keccak256(abi.encode(uint256(1), primarySigners));
+    // Calculate merkle leaf for primary signer (weight = 1)
+    bytes32 primaryLeaf = keccak256(abi.encodePacked("Sequence signer:\n", primarySignerEOA, uint256(1)));
+    
+    // Build imageHash: keccak256(keccak256(keccak256(leaf, threshold), checkpoint), checkpointer)
+    // threshold = 1, checkpoint = 0, checkpointer = address(0)
+    bytes32 withThreshold = keccak256(abi.encodePacked(primaryLeaf, bytes32(uint256(1))));
+    bytes32 withCheckpoint = keccak256(abi.encodePacked(withThreshold, bytes32(0)));
+    primary = keccak256(abi.encodePacked(withCheckpoint, bytes32(0)));
     
     // Get rollover signer (if exists and valid)
     IImmutableSigner.ExpirableSigner memory rolloverSigner = IImmutableSigner(IMMUTABLE_SIGNER_CONTRACT).rolloverSigner();
     
     if (block.timestamp <= rolloverSigner.validUntil && rolloverSigner.signer != address(0)) {
-      address[] memory rolloverSigners = new address[](1);
-      rolloverSigners[0] = rolloverSigner.signer;
-      rollover = keccak256(abi.encode(uint256(1), rolloverSigners));
+      bytes32 rolloverLeaf = keccak256(abi.encodePacked("Sequence signer:\n", rolloverSigner.signer, uint256(1)));
+      withThreshold = keccak256(abi.encodePacked(rolloverLeaf, bytes32(uint256(1))));
+      withCheckpoint = keccak256(abi.encodePacked(withThreshold, bytes32(0)));
+      rollover = keccak256(abi.encodePacked(withCheckpoint, bytes32(0)));
     } else {
       rollover = bytes32(0);
     }
