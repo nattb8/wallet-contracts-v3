@@ -16,8 +16,10 @@ contract Stage1Module is Calls, Stage1Auth, Hooks, ERC4337v07 {
 
   constructor(
     address _factory,
-    address _entryPoint
-  ) Stage1Auth(_factory, address(new Stage2Module(_entryPoint))) ERC4337v07(_entryPoint) { }
+    address _entryPoint,
+    address _immutableSignerContract,
+    address _startupWalletImpl
+  ) Stage1Auth(_factory, address(new Stage2Module(_entryPoint)), _immutableSignerContract, _startupWalletImpl) ERC4337v07(_entryPoint) { }
 
   /// @inheritdoc IAuth
   function _isValidImage(
@@ -27,3 +29,4 @@ contract Stage1Module is Calls, Stage1Auth, Hooks, ERC4337v07 {
   }
 
 }
+
